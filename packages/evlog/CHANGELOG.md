@@ -1,5 +1,30 @@
 # evlog
 
+## 3.0.0-beta.4
+
+### Patch Changes
+
+- [#1145](https://github.com/evloghq/evlog/pull/1145) [`549e907`](https://github.com/evloghq/evlog/commit/549e907c8ca76f11164ee7aa8136d96f2d7de6bc) Thanks [@HugoRCD](https://github.com/HugoRCD)! - HTTP drains retry only failures that can succeed later, and wait as long as the provider asks.
+
+  - Retried: network errors, timeouts, and `408`, `429`, `502`, `503` and `504` responses, plus Datadog's `500`, which its intake documents as retryable. Any other status, such as a `400` for a malformed payload, is sent once. Inside `createDrainPipeline` a `400` used to cost `retry.maxAttempts` requests before the batch was dropped; it now goes to `onDropped` after one. A plain `500` is no longer retried outside Datadog.
+  - `Retry-After` (seconds or an HTTP date) replaces the backoff delay. In `createDrainPipeline`, a `Retry-After` longer than `retry.maxDelayMs` pauses the pipeline and keeps the batch buffered until the delay has passed, where it used to retry after 1 s and 3 s and then drop the batch. `flush()` does not wait out a pause: it hands the buffered events to `onDropped`.
+  - Retry delays are jittered, between half and all of the configured backoff.
+  - HyperDX, Sazabi and PostHog logs (`mode: 'logs'`) make one request per pipeline attempt, like the other adapters. Against a failing backend, one event cost 9 requests inside a default pipeline; it now costs 3.
+  - `httpPost` throws a `DrainDeliveryError` (exported from `evlog/toolkit`) carrying `status`, `retryable`, `retryAfterMs` and the response `headers`. The message is unchanged. A custom drain can throw one with `retryable: false` so the pipeline drops the batch without retrying. Plain errors thrown by a custom drain are retried as before.
+
+- [#1145](https://github.com/evloghq/evlog/pull/1145) [`549e907`](https://github.com/evloghq/evlog/commit/549e907c8ca76f11164ee7aa8136d96f2d7de6bc) Thanks [@HugoRCD](https://github.com/HugoRCD)! - `createDrainPipeline` reports every event it drops.
+
+  - `onDropped(events, error, reason)` gets a third argument: `'buffer-full'`, `'rejected'` (a status such as `400` that no retry fixes), `'retries-exhausted'` or `'rate-limited'` (`flush()` ran during a provider's `Retry-After`). Existing two-argument callbacks keep working.
+  - Without `onDropped`, buffer overflow used to drop events with no log line. Every drop is now logged with `console.error`, at most once a minute with the count per reason, and once more on `flush()` for what is left.
+  - `drain.stats()` returns `{ delivered, dropped }`, the events delivered and dropped per reason since the pipeline was created.
+
+- [#1145](https://github.com/evloghq/evlog/pull/1145) [`549e907`](https://github.com/evloghq/evlog/commit/549e907c8ca76f11164ee7aa8136d96f2d7de6bc) Thanks [@HugoRCD](https://github.com/HugoRCD)! - The Sentry drain honours Sentry's rate limits per data category, like the official SDKs.
+
+  - It reads `X-Sentry-Rate-Limits` and `Retry-After` on every response, including accepted ones, and remembers them per DSN.
+  - While error events are limited, `issues: true` skips issues without sending them and logs one warning per limit window. The logs keep going out. Before, a burst of 500 errors made 500 issue requests while Sentry was dropping them.
+  - While logs are limited, `sendBatchToSentry` rejects without sending, with a `DrainDeliveryError` whose `retryAfterMs` is the remaining delay, so `createDrainPipeline` holds the batch until the limit expires.
+  - An issue Sentry rejects (such as a `400`) no longer stops the other issues of the batch. A transient failure still does.
+
 ## 3.0.0-beta.3
 
 ### Major Changes
